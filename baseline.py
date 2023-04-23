@@ -13,16 +13,16 @@ from dataset.Mydataset import Mydataset
 from scorer.pred import DotPredictor
 from model.SAGE import GraphSAGE
 from sklearn.metrics import roc_auc_score
-from scorer.loss import CEloss
+from scorer.loss import CEloss, compute_auc
 from tqdm import tqdm
 
 
 if __name__ == '__main__':
     
     #   default value
-    epochs = 100
+    epochs = 500
     cuda_device = 0
-    save_pth = './model_saved'
+    save_pth = './saved'
     
     
     #   load data
@@ -58,21 +58,20 @@ if __name__ == '__main__':
         id_v.append(word2id[v])
     dataset = Mydataset(id_u,id_v)
     g = dataset[0]
-    g = g.cuda(cuda_device)
     u, v = g.edges()
-    u = u.cuda(cuda_device)
-    v = v.cuda(cuda_device)
     
     node = np.arange(0,len(g.nodes()),1)
     node = torch.from_numpy(node)
-    node = node.cuda(cuda_device)
     
     #   generate false walk
     adj = sp.coo_matrix((np.ones(len(u)), (u.numpy(), v.numpy())), shape=(g.number_of_nodes(),g.number_of_nodes()))
     adj_neg = 1 - adj.todense() - np.eye(g.number_of_nodes())
     neg_u, neg_v = np.where(adj_neg != 0)
     neg_g = dgl.graph((neg_u, neg_v), num_nodes=g.number_of_nodes())
-    neg_g = neg_g.cuda(cuda_device)
+    
+    g = g.to('cuda:0') 
+    neg_g = neg_g.to('cuda:0') 
+    node = node.cuda(cuda_device)
 
     #   tools preparation
     pred = DotPredictor()
@@ -88,6 +87,7 @@ if __name__ == '__main__':
         h = model(g, node)
         pos_score = pred(g, h)
         neg_score = pred(g, h)
+        
         loss = loss_fn(pos_score, neg_score)
 
         # backward
@@ -95,7 +95,12 @@ if __name__ == '__main__':
         loss.backward()
         optimizer.step()
 
-        if epoch % 5 == 0:
-            print('In epoch {}, loss: {}'.format(epoch, loss))
-            print('AUC', roc_auc_score(pos_score, neg_score))
-            torch.save(model,save_pth)
+        if (epoch+1) % 5 == 0:
+            print('In epoch {}, loss: {}'.format(epoch+1, loss))
+            torch.save(model,save_pth+'/'+str(epoch+1)+'_saved.pth')
+    
+    with torch.no_grad():
+        h = model(g, node)
+        pos_score = pred(g, h)
+        neg_score = pred(g, h)
+        print('AUC', compute_auc(pos_score.cpu(), neg_score.cpu()))
