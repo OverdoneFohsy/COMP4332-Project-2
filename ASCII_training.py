@@ -11,7 +11,7 @@ from dataset.data_load import load_train_data
 import os
 from dataset.Mydataset import Mydataset
 from scorer.pred import DotPredictor
-from model.SAGE import GraphSAGE
+from model.SAGE import ASCIISAGE
 from sklearn.metrics import roc_auc_score
 from scorer.loss import CEloss, compute_auc
 from tqdm import tqdm
@@ -22,7 +22,7 @@ if __name__ == '__main__':
     #   default value
     epochs = 500
     cuda_device = 0
-    save_pth = './saved_ASCII'
+    save_pth = './ASCII_saved'
     
     
     #   load data
@@ -43,8 +43,6 @@ if __name__ == '__main__':
     else: 
         word2id = np.load('./data/word2id.npy', allow_pickle=True).item()
     length = len(word2id)
-    # print(len(word2id))
-    
     
     
     # convert the edges
@@ -59,11 +57,21 @@ if __name__ == '__main__':
     dataset = Mydataset(id_u,id_v)
     g = dataset[0]
     u, v = g.edges()
-    print('============')
-    print(len(g.nodes()))
     
-    node = np.arange(0,len(g.nodes()),1)
-    node = torch.from_numpy(node)
+    
+    id2word = dict(zip(word2id.values(), word2id.keys()))
+    vec_u = []
+    for node in g.nodes():
+        char_u = []
+        for j in range(len(id2word[node.item()])):
+            # print(nodes[i][0])
+            char_u.append(ord(id2word[node.item()][j]))
+        vec_u.append(char_u)
+    
+    in_feat = np.asarray(vec_u)
+    in_feat = torch.from_numpy(in_feat)
+    in_feat = in_feat.type(torch.FloatTensor)
+    print(in_feat.shape)
     
     #   generate false walk
     adj = sp.coo_matrix((np.ones(len(u)), (u.numpy(), v.numpy())), shape=(g.number_of_nodes(),g.number_of_nodes()))
@@ -73,13 +81,11 @@ if __name__ == '__main__':
     
     g = g.to('cuda:0') 
     neg_g = neg_g.to('cuda:0') 
-    node = node.cuda(cuda_device)
-    print('qwer')
-    print(len(g.nodes()))
-    
+    in_feat = in_feat.cuda(cuda_device)
+
     #   tools preparation
     pred = DotPredictor()
-    model = GraphSAGE(word2id,1024,1024)
+    model = ASCIISAGE(word2id,22,1024)
     model = model.cuda(cuda_device)
     optimizer = torch.optim.Adam(itertools.chain(model.parameters(), pred.parameters()), lr=0.01)
     loss_fn = CEloss()
@@ -88,9 +94,7 @@ if __name__ == '__main__':
     all_logits = []
     for epoch in tqdm(range(epochs)):
         # forward
-        print('asdf')
-        print(len(g.nodes()))
-        h = model(g, node)
+        h = model(g, in_feat)
         pos_score = pred(g, h)
         neg_score = pred(g, h)
         
@@ -106,7 +110,7 @@ if __name__ == '__main__':
             torch.save(model,save_pth+'/'+str(epoch+1)+'_saved.pth')
     
     with torch.no_grad():
-        h = model(g, node)
+        h = model(g, in_feat)
         pos_score = pred(g, h)
         neg_score = pred(g, h)
         print('AUC', compute_auc(pos_score.cpu(), neg_score.cpu()))
