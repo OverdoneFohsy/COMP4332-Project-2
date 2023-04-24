@@ -1,0 +1,24 @@
+node dim: 10,	num_walks: 5,	walk_length: 10	building a DeepWalk model...	number of walks: 41670	average walk length: 9.9018	training time: 19.9957
+valid auc: 0.9104
+node dim: 10,	num_walks: 10,	walk_length: 10	building a DeepWalk model...	number of walks: 83340	average walk length: 9.9029	training time: 41.2843
+valid auc: 0.9261
+node dim: 10,	num_walks: 20,	walk_length: 10	building a DeepWalk model...	number of walks: 166680	average walk length: 9.9036	training time: 81.1466
+valid auc: 0.9311
+node dim: 10,	num_walks: 40,	walk_length: 10	building a DeepWalk model...	number of walks: 333360	average walk length: 9.9033	training time: 159.7830
+valid auc: 0.9305
+node dim: 10,	num_walks: 5,	walk_length: 20	building a DeepWalk model...	number of walks: 41670	average walk length: 19.7629	training time: 35.5453
+valid auc: 0.9249
+node dim: 10,	num_walks: 10,	walk_length: 20	building a DeepWalk model...	number of walks: 83340	average walk length: 19.7629	training time: 71.9506
+valid auc: 0.9305
+node dim: 10,	num_walks: 20,	walk_length: 20	building a DeepWalk model...	number of walks: 166680	average walk length: 19.7638	training time: 143.0775
+valid auc: 0.9299
+node dim: 10,	num_walks: 40,	walk_length: 20	building a DeepWalk model...	number of walks: 333360	average walk length: 19.7652	training time: 284.7340
+valid auc: 0.9278
+node dim: 10,	num_walks: 5,	walk_length: 40	building a DeepWalk model...	number of walks: 41670	average walk length: 39.4158	training time: 68.5286
+valid auc: 0.9295
+node dim: 10,	num_walks: 10,	walk_length: 40	building a DeepWalk model...	number of walks: 83340	average walk length: 39.4176	training time: 133.8428
+valid auc: 0.9290
+node dim: 10,	num_walks: 20,	walk_length: 40	building a DeepWalk model...	number of walks: 166680	average walk length: 39.4221	training time: 266.4510
+valid auc: 0.9263
+node dim: 10,	num_walks: 40,	walk_length: 40	building a DeepWalk model...	number of walks: 333360	average walk length: 39.4255	training time: 541.0452
+valid auc: 0.9233
