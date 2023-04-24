@@ -4,7 +4,7 @@ from torch.utils.data import DataLoader
 from plnlp.layer import *
 from plnlp.loss import *
 from plnlp.utils import *
-
+import pandas as pd
 
 class BaseModel(object):
     """
@@ -182,7 +182,7 @@ class BaseModel(object):
         return pred
 
     @torch.no_grad()
-    def test(self, data, split_edge, batch_size, evaluator, eval_metric):
+    def test(self, data, split_edge, batch_size, neg_sampler_name,num_neg,eval_metric):
         self.encoder.eval()
         self.predictor.eval()
 
@@ -193,37 +193,58 @@ class BaseModel(object):
         mean_h = torch.mean(h, dim=0, keepdim=True)
         h = torch.cat([h, mean_h], dim=0)
 
-        pos_valid_edge, neg_valid_edge = get_pos_neg_edges('valid', split_edge)
-        pos_test_edge, neg_test_edge = get_pos_neg_edges('test', split_edge)
+        pos_valid_edge, neg_valid_edge = get_pos_neg_edges('valid', split_edge,
+                                                           edge_index=data.edge_index,
+                                                           num_nodes=self.num_nodes,
+                                                           neg_sampler_name=neg_sampler_name,
+                                                           num_neg=num_neg)
+        # pos_test_edge, neg_test_edge = get_pos_neg_edges('test', split_edge)
         pos_valid_edge, neg_valid_edge = pos_valid_edge.to(self.device), neg_valid_edge.to(self.device)
-        pos_test_edge, neg_test_edge = pos_test_edge.to(self.device), neg_test_edge.to(self.device)
+        # pos_test_edge, neg_test_edge = pos_test_edge.to(self.device), neg_test_edge.to(self.device)
 
         pos_valid_pred = self.batch_predict(h, pos_valid_edge, batch_size)
         neg_valid_pred = self.batch_predict(h, neg_valid_edge, batch_size)
 
+        # h = self.encoder(input_feat, data.adj_t)
+        # mean_h = torch.mean(h, dim=0, keepdim=True)
+        # h = torch.cat([h, mean_h], dim=0)
+
+        # pos_test_pred = self.batch_predict(h, pos_test_edge, batch_size)
+        # neg_test_pred = self.batch_predict(h, neg_test_edge, batch_size)
+
+        # if eval_metric == 'hits':
+        #     results = evaluate_hits(
+        #         evaluator,
+        #         pos_valid_pred,
+        #         neg_valid_pred,
+        #         pos_test_pred,
+        #         neg_test_pred)
+        # else:
+        #     results = evaluate_mrr(
+        #         evaluator,
+        #         pos_valid_pred,
+        #         neg_valid_pred,
+        #         pos_test_pred,
+        #         neg_test_pred)
+
+        # return results
+
+        return get_auc_score(pos_valid_pred, neg_valid_pred, pos_valid_edges, neg_valid_edges)
+
+    def gen_test_predict():
+        self.encoder.eval()
+        self.predictor.eval()
+
+        input_feat = self.create_input_feat(data)
         h = self.encoder(input_feat, data.adj_t)
+        # The default index of unseen nodes is -1,
+        # hidden representations of unseen nodes is the average of all seen node representations
         mean_h = torch.mean(h, dim=0, keepdim=True)
         h = torch.cat([h, mean_h], dim=0)
+        pred=self.batch_predict(h,split_edge['test']['edge'],batch_size)
+        
+        df.to_csv()
 
-        pos_test_pred = self.batch_predict(h, pos_test_edge, batch_size)
-        neg_test_pred = self.batch_predict(h, neg_test_edge, batch_size)
-
-        if eval_metric == 'hits':
-            results = evaluate_hits(
-                evaluator,
-                pos_valid_pred,
-                neg_valid_pred,
-                pos_test_pred,
-                neg_test_pred)
-        else:
-            results = evaluate_mrr(
-                evaluator,
-                pos_valid_pred,
-                neg_valid_pred,
-                pos_test_pred,
-                neg_test_pred)
-
-        return results
 
 
 def create_input_layer(num_nodes, num_node_feats, hidden_channels, use_node_feats=True,

@@ -7,40 +7,41 @@ import torch_geometric.transforms as T
 from torch_geometric.utils import to_undirected
 from torch_sparse import coalesce, SparseTensor
 from torch_cluster import random_walk
-from ogb.linkproppred import PygLinkPropPredDataset, Evaluator
+# from ogb.linkproppred import PygLinkPropPredDataset, Evaluator
 from plnlp.logger import Logger
 from plnlp.model import BaseModel, adjust_lr
 from plnlp.utils import gcn_normalization, adj_normalization
-
+from plnlp.dataset import get_data
+from datetime import datetime
 
 def argument():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--encoder', type=str, default='SAGE')
-    parser.add_argument('--predictor', type=str, default='MLP')
+    parser.add_argument('--encoder', type=str, default='GCN')
+    parser.add_argument('--predictor', type=str, default='MLPCAT')
     parser.add_argument('--optimizer', type=str, default='Adam')
-    parser.add_argument('--loss_func', type=str, default='AUC')
+    parser.add_argument('--loss_func', type=str, default='WeightedAUC')
     parser.add_argument('--neg_sampler', type=str, default='global')
     parser.add_argument('--data_name', type=str, default='ogbl-ddi')
-    parser.add_argument('--data_path', type=str, default='dataset')
-    parser.add_argument('--eval_metric', type=str, default='hits')
+    parser.add_argument('--data_path', type=str, default='data')
+    parser.add_argument('--eval_metric', type=str, default='auc')
     parser.add_argument('--walk_start_type', type=str, default='edge')
     parser.add_argument('--res_dir', type=str, default='')
     parser.add_argument('--pretrain_emb', type=str, default='')
     parser.add_argument('--gnn_num_layers', type=int, default=2)
     parser.add_argument('--mlp_num_layers', type=int, default=2)
-    parser.add_argument('--emb_hidden_channels', type=int, default=256)
-    parser.add_argument('--gnn_hidden_channels', type=int, default=256)
-    parser.add_argument('--mlp_hidden_channels', type=int, default=256)
+    parser.add_argument('--emb_hidden_channels', type=int, default=128)
+    parser.add_argument('--gnn_hidden_channels', type=int, default=128)
+    parser.add_argument('--mlp_hidden_channels', type=int, default=128)
     parser.add_argument('--dropout', type=float, default=0.0)
     parser.add_argument('--grad_clip_norm', type=float, default=2.0)
     parser.add_argument('--batch_size', type=int, default=64 * 1024)
     parser.add_argument('--lr', type=float, default=0.001)
-    parser.add_argument('--num_neg', type=int, default=1)
-    parser.add_argument('--walk_length', type=int, default=5)
+    parser.add_argument('--num_neg', type=int, default=3)
+    parser.add_argument('--walk_length', type=int, default=10)
     parser.add_argument('--epochs', type=int, default=500)
     parser.add_argument('--log_steps', type=int, default=1)
     parser.add_argument('--eval_steps', type=int, default=5)
-    parser.add_argument('--runs', type=int, default=10)
+    parser.add_argument('--runs', type=int, default=1)
     parser.add_argument('--year', type=int, default=-1)
     parser.add_argument('--device', type=int, default=0)
     parser.add_argument('--use_lr_decay', type=str2bool, default=False)
@@ -50,7 +51,7 @@ def argument():
     parser.add_argument('--train_on_subgraph', type=str2bool, default=False)
     parser.add_argument('--use_valedges_as_input', type=str2bool, default=False)
     parser.add_argument('--eval_last_best', type=str2bool, default=False)
-    parser.add_argument('--random_walk_augment', type=str2bool, default=False)
+    parser.add_argument('--random_walk_augment', type=str2bool, default=True)
     args = parser.parse_args()
     return args
 
@@ -71,17 +72,17 @@ def main():
     device = f'cuda:{args.device}' if torch.cuda.is_available() else 'cpu'
     device = torch.device(device)
 
-    dataset = PygLinkPropPredDataset(name=args.data_name, root=args.data_path)
-    data = dataset[0]
+    # dataset = PygLinkPropPredDataset(name=args.data_name, root=args.data_path)
+    id_dict,data, split_edge= get_data(args.data_path)
 
     if hasattr(data, 'edge_weight'):
         if data.edge_weight is not None:
             data.edge_weight = data.edge_weight.view(-1).to(torch.float)
-
+    edge_index = data.edge_index
     data = T.ToSparseTensor()(data)
     row, col, _ = data.adj_t.coo()
     data.edge_index = torch.stack([col, row], dim=0)
-
+    data.adj_t=data.adj_t.to_symmetric()
     if hasattr(data, 'num_features'):
         num_node_feats = data.num_features
     else:
@@ -92,7 +93,7 @@ def main():
     else:
         num_nodes = data.adj_t.size(0)
 
-    split_edge = dataset.get_edge_split()
+    # split_edge = dataset.get_edge_split()
 
     print(args)
 
@@ -106,48 +107,48 @@ def main():
         if data.x is not None:
             data.x = data.x.to(torch.float)
 
-    if args.data_name == 'ogbl-citation2':
-        data.adj_t = data.adj_t.to_symmetric()
+    # if args.data_name == 'ogbl-citation2':
+    #     data.adj_t = data.adj_t.to_symmetric()
 
-    if args.data_name == 'ogbl-collab':
-        # only train edges after specific year
-        if args.year > 0 and hasattr(data, 'edge_year'):
-            selected_year_index = torch.reshape(
-                (split_edge['train']['year'] >= args.year).nonzero(as_tuple=False), (-1,))
-            split_edge['train']['edge'] = split_edge['train']['edge'][selected_year_index]
-            split_edge['train']['weight'] = split_edge['train']['weight'][selected_year_index]
-            split_edge['train']['year'] = split_edge['train']['year'][selected_year_index]
-            train_edge_index = split_edge['train']['edge'].t()
-            # create adjacency matrix
-            new_edges = to_undirected(train_edge_index, split_edge['train']['weight'], reduce='add')
-            new_edge_index, new_edge_weight = new_edges[0], new_edges[1]
-            data.adj_t = SparseTensor(row=new_edge_index[0],
-                                      col=new_edge_index[1],
-                                      value=new_edge_weight.to(torch.float32))
-            data.edge_index = new_edge_index
+    # if args.data_name == 'ogbl-collab':
+    #     # only train edges after specific year
+    #     if args.year > 0 and hasattr(data, 'edge_year'):
+    #         selected_year_index = torch.reshape(
+    #             (split_edge['train']['year'] >= args.year).nonzero(as_tuple=False), (-1,))
+    #         split_edge['train']['edge'] = split_edge['train']['edge'][selected_year_index]
+    #         split_edge['train']['weight'] = split_edge['train']['weight'][selected_year_index]
+    #         split_edge['train']['year'] = split_edge['train']['year'][selected_year_index]
+    #         train_edge_index = split_edge['train']['edge'].t()
+    #         # create adjacency matrix
+    #         new_edges = to_undirected(train_edge_index, split_edge['train']['weight'], reduce='add')
+    #         new_edge_index, new_edge_weight = new_edges[0], new_edges[1]
+    #         data.adj_t = SparseTensor(row=new_edge_index[0],
+    #                                   col=new_edge_index[1],
+    #                                   value=new_edge_weight.to(torch.float32))
+    #         data.edge_index = new_edge_index
 
-        # Use training + validation edges
-        if args.use_valedges_as_input:
-            full_edge_index = torch.cat([split_edge['valid']['edge'].t(), split_edge['train']['edge'].t()], dim=-1)
-            full_edge_weight = torch.cat([split_edge['train']['weight'], split_edge['valid']['weight']], dim=-1)
-            # create adjacency matrix
-            new_edges = to_undirected(full_edge_index, full_edge_weight, reduce='add')
-            new_edge_index, new_edge_weight = new_edges[0], new_edges[1]
-            data.adj_t = SparseTensor(row=new_edge_index[0],
-                                      col=new_edge_index[1],
-                                      value=new_edge_weight.to(torch.float32))
-            data.edge_index = new_edge_index
+    #     # Use training + validation edges
+    #     if args.use_valedges_as_input:
+    #         full_edge_index = torch.cat([split_edge['valid']['edge'].t(), split_edge['train']['edge'].t()], dim=-1)
+    #         full_edge_weight = torch.cat([split_edge['train']['weight'], split_edge['valid']['weight']], dim=-1)
+    #         # create adjacency matrix
+    #         new_edges = to_undirected(full_edge_index, full_edge_weight, reduce='add')
+    #         new_edge_index, new_edge_weight = new_edges[0], new_edges[1]
+    #         data.adj_t = SparseTensor(row=new_edge_index[0],
+    #                                   col=new_edge_index[1],
+    #                                   value=new_edge_weight.to(torch.float32))
+    #         data.edge_index = new_edge_index
 
-            if args.use_coalesce:
-                full_edge_index, full_edge_weight = coalesce(full_edge_index, full_edge_weight, num_nodes, num_nodes)
+    #         if args.use_coalesce:
+    #             full_edge_index, full_edge_weight = coalesce(full_edge_index, full_edge_weight, num_nodes, num_nodes)
 
-            # edge weight normalization
-            split_edge['train']['edge'] = full_edge_index.t()
-            deg = data.adj_t.sum(dim=1).to(torch.float)
-            deg_inv_sqrt = deg.pow(-0.5)
-            deg_inv_sqrt[deg_inv_sqrt == float('inf')] = 0
-            split_edge['train']['weight'] = deg_inv_sqrt[full_edge_index[0]] * full_edge_weight * deg_inv_sqrt[
-                full_edge_index[1]]
+    #         # edge weight normalization
+    #         split_edge['train']['edge'] = full_edge_index.t()
+    #         deg = data.adj_t.sum(dim=1).to(torch.float)
+    #         deg_inv_sqrt = deg.pow(-0.5)
+    #         deg_inv_sqrt[deg_inv_sqrt == float('inf')] = 0
+    #         split_edge['train']['weight'] = deg_inv_sqrt[full_edge_index[0]] * full_edge_weight * deg_inv_sqrt[
+    #             full_edge_index[1]]
 
 #         # reindex node ids on sub-graph
 #         if args.train_on_subgraph:
@@ -212,8 +213,8 @@ def main():
     with open(log_file, 'a') as f:
         f.write(total_params_print + '\n')
 
-    evaluator = Evaluator(name=args.data_name)
-
+    # evaluator = Evaluator(name=args.data_name)
+    evaluator=None
     if args.eval_metric == 'hits':
         loggers = {
             'Hits@20': Logger(args.runs, args),
@@ -224,6 +225,11 @@ def main():
         loggers = {
             'MRR': Logger(args.runs, args),
         }
+    elif args.eval_metric=='auc':
+        loggers={
+            'ROC': Logger(args.runs,args)
+        }
+
 
     if args.random_walk_augment:
         rw_row, rw_col, _ = data.adj_t.coo()
@@ -239,14 +245,16 @@ def main():
         cur_lr = args.lr
         for epoch in range(1, 1 + args.epochs):
             if args.random_walk_augment:
+                print('generating rw')
                 walk = random_walk(rw_row, rw_col, rw_start, walk_length=args.walk_length)
+                # print(walk)
                 pairs = []
                 weights = []
                 for j in range(args.walk_length):
                     pairs.append(walk[:, [0, j + 1]])
                     weights.append(torch.ones((walk.size(0),), dtype=torch.float) / (j + 1))
                 pairs = torch.cat(pairs, dim=0)
-                weights = torch.cat(weights, dim=0)
+                weights = torch.cat(weights, dim=0).to(device)
                 # remove self-loop edges
                 mask = ((pairs[:, 0] - pairs[:, 1]) != 0)
                 split_edge['train']['edge'] = torch.masked_select(pairs, mask.view(-1, 1)).view(-1, 2)
@@ -260,20 +268,24 @@ def main():
             if epoch % args.eval_steps == 0:
                 results = model.test(data, split_edge,
                                      batch_size=args.batch_size,
-                                     evaluator=evaluator,
+                                     neg_sampler_name=args.neg_sampler,
+                                     num_neg=args.num_neg,
                                      eval_metric=args.eval_metric)
                 for key, result in results.items():
                     loggers[key].add_result(run, result)
+                # loggers['ROC'].add_result(run, results)
+
                 if epoch % args.log_steps == 0:
                     spent_time = time.time() - start_time
                     for key, result in results.items():
-                        valid_res, test_res = result
+                        valid_res = result
                         to_print = (f'Run: {run + 1:02d}, '
                                     f'Epoch: {epoch:02d}, '
                                     f'Loss: {loss:.4f}, '
                                     f'Learning Rate: {cur_lr:.4f}, '
-                                    f'Valid: {100 * valid_res:.2f}%, '
-                                    f'Test: {100 * test_res:.2f}%')
+                                    f'Valid: {100 * valid_res:.2f}% '
+                                    # f'Test: {100 * test_res:.2f}%'
+                                    )
                         print(key)
                         print(to_print)
                         with open(log_file, 'a') as f:
@@ -296,7 +308,9 @@ def main():
             with open(log_file, 'a') as f:
                 print(key, file=f)
                 loggers[key].print_statistics(run, f=f, last_best=args.eval_last_best)
-
+        pred=model.batch_predict()
+        df=pd.DataFrame.from_dict({'src':split_edge['test']['src'],'dst':split_edge['test']['dst'],'score':pred.tolist()})
+        df.to_csv(datetime.now().strftime('%H%M%S')+'_pred.csv')
     for key in loggers.keys():
         print(key)
         loggers[key].print_statistics(last_best=args.eval_last_best)
@@ -304,6 +318,6 @@ def main():
             print(key, file=f)
             loggers[key].print_statistics(f=f, last_best=args.eval_last_best)
 
-
+    
 if __name__ == "__main__":
     main()

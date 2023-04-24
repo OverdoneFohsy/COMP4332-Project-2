@@ -2,43 +2,46 @@
 import torch
 import numpy as np
 from plnlp.negative_sample import global_neg_sample, global_perm_neg_sample, local_neg_sample
-
+from sklearn.metrics import roc_auc_score
 
 def get_pos_neg_edges(split, split_edge, edge_index=None, num_nodes=None, neg_sampler_name=None, num_neg=None):
-    if 'edge' in split_edge['train']:
+    # if 'edge' in split_edge['train']:
         pos_edge = split_edge[split]['edge']
-    elif 'source_node' in split_edge['train']:
-        source = split_edge[split]['source_node']
-        target = split_edge[split]['target_node']
-        pos_edge = torch.stack([source, target]).t()
+    # elif 'source_node' in split_edge['train']:
+    #     source = split_edge[split]['source_node']
+    #     target = split_edge[split]['target_node']
+    #     pos_edge = torch.stack([source, target]).t()
 
-    if split == 'train':
+    # if split == 'train':
+        # print(neg_sampler_name)
         if neg_sampler_name == 'local':
             neg_edge = local_neg_sample(
                 pos_edge,
                 num_nodes=num_nodes,
                 num_neg=num_neg)
         elif neg_sampler_name == 'global':
+
             neg_edge = global_neg_sample(
                 edge_index,
                 num_nodes=num_nodes,
                 num_samples=pos_edge.size(0),
                 num_neg=num_neg)
         else:
+
             neg_edge = global_perm_neg_sample(
                 edge_index,
                 num_nodes=num_nodes,
                 num_samples=pos_edge.size(0),
                 num_neg=num_neg)
-    else:
-        if 'edge' in split_edge['train']:
-            neg_edge = split_edge[split]['edge_neg']
-        elif 'source_node' in split_edge['train']:
-            target_neg = split_edge[split]['target_node_neg']
-            neg_per_target = target_neg.size(1)
-            neg_edge = torch.stack([source.repeat_interleave(neg_per_target),
-                                    target_neg.view(-1)]).t()
-    return pos_edge, neg_edge
+    # else:
+    #     if 'edge' in split_edge['train']:
+    #         neg_edge = split_edge[split]['edge_neg']
+    #     elif 'source_node' in split_edge['train']:
+    #         target_neg = split_edge[split]['target_node_neg']
+    #         neg_per_target = target_neg.size(1)
+    #         neg_edge = torch.stack([source.repeat_interleave(neg_per_target),
+    #                                 target_neg.view(-1)]).t()
+        return pos_edge, neg_edge
 
 
 def evaluate_hits(evaluator, pos_val_pred, neg_val_pred,
@@ -79,6 +82,22 @@ def evaluate_mrr(evaluator, pos_val_pred, neg_val_pred,
 
     return results
 
+def get_auc_score(pos_pred,neg_pred, pos_edges, neg_edges):
+    """
+    get the auc score
+    """
+
+    y_true = [1] * pos_edges.size(0) + [0] * neg_edges.size(0)
+    
+    y_score = list()
+    y_score.append(pos_pred.tolist())
+    y_score.append(neg_pred.tolist())
+    # for p in pos_pred:
+    #     y_score.append(get_cosine_sim(model, e[0], e[1]))
+    # for e in false_edges:
+    #     y_score.append(get_cosine_sim(model, e[0], e[1]))
+    
+    return {'ROC':roc_auc_score(y_true, y_score)}
 
 def gcn_normalization(adj_t):
     adj_t = adj_t.set_diag()
